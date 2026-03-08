@@ -490,6 +490,8 @@ textarea:focus,input[type=text]:focus{border-color:rgba(255,215,0,.5);box-shadow
       </div>
 
       <button class="save-btn" onclick="saveSettings()">💾 &nbsp;SAVE SETTINGS</button>
+      <button class="save-btn" onclick="copyShareLink()" style="margin-top:10px;background:linear-gradient(135deg,var(--discord),var(--discord-dark));color:#fff;box-shadow:0 4px 22px rgba(88,101,242,.28)">🔗 &nbsp;COPY MY LINK (use on any device)</button>
+      <div class="hint" style="text-align:center;margin-top:8px">Save settings first, then copy your link. Open it on your phone or any browser — your webhooks & settings travel with it.</div>
     </div>
   </div>
 </div>
@@ -546,11 +548,47 @@ const QUOTE_POOL = [
   {quote:"Not what we endure, but how we endure, is what defines us.",author:"Seneca"},
 ];
 
-let state = (()=>{ try{ return JSON.parse(localStorage.getItem('qotd_state'))||null; }catch{return null;} })() || {
+// ── Config sharing via URL hash ─────────────────────────────
+// Settings & webhooks are encoded in the URL hash so you can
+// bookmark the same link on any device and keep your config.
+function loadConfigFromHash(){
+  try{
+    const h=location.hash.slice(1);
+    if(!h) return null;
+    const json=decodeURIComponent(atob(h));
+    return JSON.parse(json);
+  }catch{ return null; }
+}
+function saveConfigToHash(settings, webhooks){
+  try{
+    const obj={settings,webhooks};
+    const b64=btoa(encodeURIComponent(JSON.stringify(obj)));
+    history.replaceState(null,'',location.pathname+'#'+b64);
+  }catch{}
+}
+
+const hashConfig=loadConfigFromHash();
+const lsState=(()=>{ try{ return JSON.parse(localStorage.getItem('qotd_state'))||null; }catch{return null;} })();
+
+const DEFAULT_STATE={
   settings:{posterName:'丂卄ΛK¥丂卄ΔĐØ山',avatarUrl:'',avatarB64:'',embedTitle:'🌟 Quote of the Day',staticIntro:'',embedColor:'#FFD700',spellcheck:true},
-  webhooks:[{id:1,name:'Personal',url:'',enabled:true},{id:2,name:'Hytale',url:'',enabled:true}],
+  webhooks:[],
   history:[],
 };
+
+// Priority: URL hash config > localStorage > defaults
+let state;
+if(hashConfig){
+  state={
+    settings:hashConfig.settings||DEFAULT_STATE.settings,
+    webhooks:hashConfig.webhooks||DEFAULT_STATE.webhooks,
+    history:(lsState&&lsState.history)||[],
+  };
+} else if(lsState){
+  state=lsState;
+} else {
+  state=JSON.parse(JSON.stringify(DEFAULT_STATE));
+}
 if(!state.settings.hasOwnProperty('avatarB64')) state.settings.avatarB64='';
 
 let draft={}, draftWebhooks=[];
@@ -559,7 +597,10 @@ let avMode='link';
 let sugPool=[], sugIndex=0;
 let activePicker=null;
 
-function saveState(){ localStorage.setItem('qotd_state',JSON.stringify(state)); }
+function saveState(){ 
+  localStorage.setItem('qotd_state',JSON.stringify(state));
+  saveConfigToHash(state.settings, state.webhooks);
+}
 
 // ── Emoji Picker ───────────────────────────────────────────
 // Pickers are fixed-position elements appended to body.
@@ -801,6 +842,10 @@ function useSuggestion(){
 function renderChips(){
   const wrap=document.getElementById('server-chips');
   wrap.innerHTML='';
+  if(!state.webhooks.length){
+    wrap.innerHTML='<div style="font-size:13px;color:var(--text-dim);font-style:italic;padding:4px 0">No servers yet — add webhooks in Settings ⚙️</div>';
+    return;
+  }
   state.webhooks.forEach(w=>{
     const chip=document.createElement('div');
     chip.className='server-chip'+(w.enabled?' on':'');
@@ -1062,6 +1107,24 @@ function saveSettings(){
   showToast('✅ Settings saved!','success');
 }
 
+function copyShareLink(){
+  saveConfigToHash(state.settings, state.webhooks);
+  const url=location.href;
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(url).then(()=>{
+      showToast('🔗 Link copied! Open it on any device.','success');
+    }).catch(()=>fallbackCopy(url));
+  } else { fallbackCopy(url); }
+}
+function fallbackCopy(text){
+  const ta=document.createElement('textarea');
+  ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); showToast('🔗 Link copied!','success'); }
+  catch{ showToast('Copy this URL from your address bar','error'); }
+  document.body.removeChild(ta);
+}
+
 // ── Toast ──────────────────────────────────────────────────
 let toastTimer;
 function showToast(msg,type='success'){
@@ -1148,6 +1211,11 @@ function getRecentEmojis(){
 }
 
 function init(){
+  // If config was loaded from URL hash, sync to localStorage
+  if(hashConfig){ saveState(); }
+  // If we have webhooks but no hash yet, write hash
+  if(!location.hash && state.webhooks.length){ saveConfigToHash(state.settings, state.webhooks); }
+  
   sugPool=buildPool(); sugIndex=0; showSuggestion();
   renderChips(); updatePreview();
   document.getElementById('quote-input').spellcheck=state.settings.spellcheck;
